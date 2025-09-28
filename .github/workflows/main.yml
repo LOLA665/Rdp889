@@ -1,0 +1,85 @@
+name: My Summer Car 40FPS Ultra
+
+on:
+  workflow_dispatch:
+
+jobs:
+  msc-gaming:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+    - name: System Boost
+      shell: pwsh
+      run: |
+        powercfg /setactive e9a42b02-d5df-448d-aa00-03f14749eb61
+        Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "DisablePagingExecutive" 1
+        Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "LargeSystemCache" 1
+
+    - name: Install GPU Stack
+      shell: pwsh
+      run: |
+        $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/latest/download/mesa3d-24.0.1-release-msvc.7z"
+        Invoke-WebRequest -Uri $mesaUrl -OutFile "$env:TEMP\mesa.7z"
+        & "C:\Program Files\7-Zip\7z.exe" x "$env:TEMP\mesa.7z" -oC:\gpu -y
+
+    - name: Configure GPU
+      shell: pwsh
+      run: |
+        $config = @'
+gallium_drivers=swrast
+vblank_mode=0
+mesa_glthread=true
+'@
+        Set-Content -Path "C:\gpu\mesa.conf" -Value $config
+        [Environment]::SetEnvironmentVariable("GALLIUM_DRIVER", "swrast", "Machine")
+        [Environment]::SetEnvironmentVariable("MESA_CONFIG", "C:\gpu\mesa.conf", "Machine")
+
+    - name: Setup RDP
+      shell: pwsh
+      run: |
+        Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" "fDenyTSConnections" 0
+        Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" "UserAuthentication" 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+    - name: Create User
+      shell: pwsh
+      run: |
+        net user gamer GamerPass123! /add /y
+        net localgroup administrators gamer /add
+        Write-Output "GAMER_USER=gamer" >> $env:GITHUB_ENV
+        Write-Output "GAMER_PASS=GamerPass123!" >> $env:GITHUB_ENV
+
+    - name: Install Runtimes
+      shell: pwsh
+      run: |
+        $vc2019 = "https://aka.ms/vs/16/release/vc_redist.x64.exe"
+        Invoke-WebRequest -Uri $vc2019 -OutFile "$env:TEMP\vc.exe"
+        Start-Process "$env:TEMP\vc.exe" "/install /quiet /norestart" -Wait
+
+    - name: Setup Tailscale
+      shell: pwsh
+      run: |
+        $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+        Invoke-WebRequest -Uri $tsUrl -OutFile "$env:TEMP\tailscale.msi"
+        Start-Process msiexec.exe "/i `"$env:TEMP\tailscale.msi`" /quiet /norestart" -Wait
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=msc-$env:GITHUB_RUN_ID
+
+    - name: Show Info
+      shell: pwsh
+      run: |
+        $tsIp = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+        Write-Host "=== MSC GAMING READY ==="
+        Write-Host "User: $env:GAMER_USER"
+        Write-Host "Pass: $env:GAMER_PASS"
+        Write-Host "IP: $tsIp"
+        Write-Host "FPS Target: 35-40"
+        Write-Host "======================"
+
+    - name: Keep Alive
+      shell: pwsh
+      run: |
+        for ($i = 0; $i -lt 36; $i++) {
+          Write-Host "Active: $i/36"
+          Start-Sleep 600
+        }
