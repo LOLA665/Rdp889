@@ -1,0 +1,142 @@
+name: RDP Gaming Runner (ULTIMATE FPS HACK - Fără Erori)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rdp_duration:
+        description: 'Durata MAXIMA a sesiunii RDP (minute). Max. permisă: 360.'
+        required: true
+        default: '360'
+      # Cheia de autentificare Tailscale este acum preluată din secrets.TS_AUTHKEY
+      
+jobs:
+  rdp:
+    runs-on: windows-2022
+    env:
+      # FIX: TS_AUTHKEY este preluată securizat din Secrets-urile depozitului
+      TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }} 
+    
+    steps:
+      
+      # --- 1. SETARE CREDENȚIALE ȘI OPTIMIZARE RDP ---
+
+      - name: 1. Setare Credențiale și Optimizare RDP
+        shell: pwsh
+        run: |
+          $user = "runneradmin"
+          $pass = "RdpUser!1"
+          
+          # Creare/resetare utilizator
+          if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) { net user $user $pass } else { net user $user $pass /add; net localgroup administrators $user /add }
+          
+          # Optimizări RDP
+          $RDPPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+          Set-ItemProperty -Path $RDPPath -Name 'MaxAdapterRetries' -Value 0
+          Set-ItemProperty -Path $RDPPath -Name 'MaxProtocolRetries' -Value 0
+          Set-ItemProperty -Path $RDPPath -Name 'MaxCompressionDisabled' -Value 1 
+          
+          Add-Content -Path $env:GITHUB_ENV -Value ("RUNNERADMIN_USER={0}" -f $user)
+          Add-Content -Path $env:GITHUB_ENV -Value ("RUNNERADMIN_PASS={0}" -f $pass)
+      
+      
+      # --- 2. INSTALARE TAILSCALE ȘI CONECTARE ---
+
+      - name: 2. Instalare Tailscale și Conectare la Retea (Folosind Secret)
+        shell: pwsh
+        run: |
+          # Instalare Tailscale
+          $tailscaleSetup = Join-Path $env:TEMP 'tailscale-setup.msi'
+          Invoke-WebRequest 'https://pkgs.tailscale.com/stable/tailscale-setup.msi' -OutFile $tailscaleSetup -ErrorAction Stop
+          Start-Process -FilePath msiexec -ArgumentList "/i `"$tailscaleSetup`" /qn" -Wait -NoNewWindow
+          
+          # Conectare la rețeaua Tailscale
+          # Verificarea se face acum pe variabila de mediu setată în YAML
+          if (-not [string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
+            # FIX: Folosim cheia direct din variabila de mediu securizată
+            & "C:\Program Files\Tailscale\tailscale.exe" up --authkey $env:TS_AUTHKEY
+            
+            $ip = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4)
+            Add-Content -Path $env:GITHUB_ENV -Value ("TAILSCALE_IP={0}" -f $ip)
+            
+            Write-Host "========================================================="
+            Write-Host " TAILSCALE RDP DETALII DE CONECTARE "
+            Write-Host " Adresă RDP: $ip (Port implicit 3389)"
+            Write-Host " Utilizator: ${{ env.RUNNERADMIN_USER }}"
+            Write-Host " Parolă: ${{ env.RUNNERADMIN_PASS }}"
+            Write-Host "========================================================="
+          } else {
+            Write-Error "Eroare: Secretul TS_AUTHKEY nu este setat sau este gol. Eșec."
+            exit 1
+          }
+
+
+      # --- 3. ULTIMATE FPS HACK ȘI LANSARE JOCURI ---
+
+      - name: 3. ULTIMATE FPS HACK (God Mode CPU) și Lansare Jocuri
+        shell: pwsh
+        run: |
+          Write-Host "ACTIVARE ULTIMATE FPS HACK: ULTIMA ȘANSĂ PENTRU MAX FPS!"
+
+          # Hack-uri de sistem și optimizări I/O
+          Stop-Service -Name "WSearch" -ErrorAction SilentlyContinue 
+          Stop-Service -Name "SysMain" -ErrorAction SilentlyContinue 
+          Stop-Service -Name "BITS" -ErrorAction SilentlyContinue    
+          powercfg -setactive 8c5e7ad2-e89e-4a44-bc37-100e4706598a
+          try { Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\ContentIndex" -Name "StartupDelay" -Value 0xFFFFFFFF } catch {}
+
+          # Dezactivare Paging File și Optimizări Ecran
+          $pageFile = Get-CimInstance -ClassName Win32_PageFileSetting
+          if ($pageFile) { $pageFile.Delete(); }
+          $GameBarPath = 'HKCU:\System\GameConfigStore'
+          Set-ItemProperty -Path $GameBarPath -Name 'DisableFullScreenOptimizations' -Value 1 -Type DWORD -Force
+
+          # Oprire DWM (Desktop Window Manager)
+          Stop-Service -Name "UxSms" -ErrorAction SilentlyContinue
+          Stop-Process -Name "dwm" -ErrorAction SilentlyContinue
+
+          # Instalarea Steam (dacă nu e instalat deja)
+          $steamExecutable = "C:\Program Files (x86)\Steam\steam.exe"
+          if (-not (Test-Path $steamExecutable)) {
+             $steamSetup = Join-Path $env:TEMP 'SteamSetup.exe'
+             try {
+                Invoke-WebRequest 'https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe' -OutFile $steamSetup -ErrorAction Stop
+                Start-Process $steamSetup -ArgumentList '/S' -Wait -NoNewWindow
+             } catch {}
+          }
+          
+          $mscPath = "C:\Games\MySummerCar\mysummercar.exe"
+          $gtaAppId = "271590"
+          $cpuAffinityMask = 0xFF 
+
+          # Lansare MSC (Realtime + Afinitate CPU Max)
+          if (Test-Path $mscPath) {
+              $procMSC = Start-Process -FilePath $mscPath -PassThru -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 15
+              $mscProcess = Get-Process -Id $procMSC.Id -ErrorAction SilentlyContinue
+              if ($mscProcess) { 
+                $mscProcess.PriorityClass = "Realtime" 
+                $mscProcess.ProcessorAffinity = $cpuAffinityMask
+                Write-Host "MSC setat la Realtime și Afinitate Max."
+              } 
+          }
+          
+          # Lansare GTA V (Realtime + Afinitate CPU Max)
+          if (Test-Path $steamExecutable) {
+              Start-Process -FilePath $steamExecutable -ArgumentList "-applaunch $gtaAppId" -PassThru -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 15
+              $gtaProcess = Get-Process -Name "GTA5" -ErrorAction SilentlyContinue
+              if ($gtaProcess) { 
+                $gtaProcess.PriorityClass = "Realtime"
+                $gtaProcess.ProcessorAffinity = $cpuAffinityMask
+                Write-Host "GTA5 setat la Realtime și Afinitate Max."
+              }
+          }
+
+          Write-Host "Conectează-te acum! Folosește Tailscale IP: ${{ env.TAILSCALE_IP }}"
+          
+          # Loop infinit pentru a menține sesiunea deschisă
+          Write-Host "Intrăm în loop infinit (max ${{ github.event.inputs.rdp_duration }} min)."
+          while ($true) {
+              Start-Sleep -Seconds 600
+              Write-Host "Loop activ. Timp ramas pe GitHub."
+          }
