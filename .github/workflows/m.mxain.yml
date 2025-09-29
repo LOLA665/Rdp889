@@ -1,0 +1,183 @@
+name: RDP Gaming Server — Gaming Boost for GTA5 and My Summer Car
+
+on:
+  workflow_dispatch:
+
+env:
+  TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+  RUNNERADMIN_PASS: ${{ secrets.RUNNERADMIN_PASS }}
+  KEEPALIVE_ITER: 432
+  RUNNERADMIN_USER: runneradmin
+
+jobs:
+  rdp-gaming:
+    runs-on: windows-2022
+    timeout-minutes: 4320
+
+    steps:
+      - name: Checkout code
+        uses: "actions/checkout@v4"
+
+      - name: Ensure runneradmin exists & export credentials
+        shell: pwsh
+        run: |
+          $provided = $env:RUNNERADMIN_PASS
+          $isValid = $false
+          if (-not [string]::IsNullOrWhiteSpace($provided)) {
+            if ($provided.Length -ge 8 -and $provided -match '[A-Z]' -and $provided -match '[a-z]' -and $provided -match '\d' -and $provided -match '[^a-zA-Z0-9]') { $isValid = $true }
+          }
+          if ($isValid) { $pass = $provided } else { $pass = "Runner@" + (Get-Random -Minimum 10000 -Maximum 99999) }
+          $user = $env:RUNNERADMIN_USER
+          if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
+            try { net user $user $pass } catch { Write-Warning "Password reset for $user failed: $($_.Exception.Message)" }
+            Write-Host "User $user exists - password reset attempted."
+          } else {
+            try { net user $user $pass /add; net localgroup administrators $user /add; Write-Host "Created user $user and added to admins." } 
+            catch { Write-Warning "User creation failed: $($_.Exception.Message)" }
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value ("RUNNERADMIN_USER={0}" -f $user)
+          Add-Content -Path $env:GITHUB_ENV -Value ("RUNNERADMIN_PASS={0}" -f $pass)
+
+      - name: Enable Remote Desktop & firewall
+        shell: pwsh
+        run: |
+          try { Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force } catch {}
+          try { Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue } catch {}
+
+      - name: Install dependencies (DirectX, .NET, VC++ Redistributables)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $t = $env:TEMP
+          $dx = Join-Path $t 'directx_Jun2010_redist.exe'
+          try { Invoke-WebRequest 'https://download.microsoft.com/download/8/4/A/84A35BF1-DAFE-4AE8-8280-9E7F4AA0AAB1/directx_Jun2010_redist.exe' -OutFile $dx -ErrorAction Stop; Start-Process $dx -ArgumentList '/Q' -Wait } catch {}
+          $net = Join-Path $t 'ndp48.exe'
+          try { Invoke-WebRequest 'https://go.microsoft.com/fwlink/?linkid=2088631' -OutFile $net -ErrorAction Stop; Start-Process $net -ArgumentList '/q','/norestart' -Wait } catch {}
+          $vcx86 = Join-Path $t 'vc_redist.x86.exe'
+          $vcx64 = Join-Path $t 'vc_redist.x64.exe'
+          try {
+            Invoke-WebRequest 'https://aka.ms/vs/17/release/vc_redist.x86.exe' -OutFile $vcx86 -ErrorAction Stop
+            Invoke-WebRequest 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $vcx64 -ErrorAction Stop
+            Start-Process $vcx86 -ArgumentList '/install','/quiet','/norestart' -Wait
+            Start-Process $vcx64 -ArgumentList '/install','/quiet','/norestart' -Wait
+          } catch {}
+
+      - name: Install SwiftShader (software GPU fallback)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $t = Join-Path $env:TEMP "swiftshader"
+          New-Item -Path $t -ItemType Directory -Force | Out-Null
+          $zip = Join-Path $env:TEMP "SwiftShader-Release.zip"
+          try {
+            Invoke-WebRequest 'https://github.com/google/swiftshader/releases/latest/download/SwiftShader-Release.zip' -OutFile $zip -ErrorAction Stop
+            Expand-Archive -Path $zip -DestinationPath $t -Force
+            $fallback = "C:\Games\GPU_SoftwareFallback"
+            New-Item -Path $fallback -ItemType Directory -Force | Out-Null
+            Get-ChildItem -Path $t -Filter "*.dll" -Recurse | ForEach-Object { Copy-Item -Path $_.FullName -Destination $fallback -Force }
+          } catch {}
+
+      - name: Aggressive Windows Gaming Optimizations
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          try { powercfg /S SCHEME_MIN } catch {}
+          
+          $svcList = @('WSearch','SysMain','WerSvc','dmwappushservice','XblGameSave','RetailDemo','CDPUserSvc','MapsBroker','MessagingService','DiagTrack','WMPNetworkSvc')
+          foreach ($s in $svcList) {
+            try {
+              if (Get-Service $s -ErrorAction SilentlyContinue) {
+                Set-Service $s -StartupType Disabled -ErrorAction SilentlyContinue
+                Stop-Service $s -Force -ErrorAction SilentlyContinue
+              }
+            } catch {}
+          }
+          
+          try { reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 2 /f } catch {}
+          try { reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 0 /f } catch {}
+          try { reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v Priority /t REG_DWORD /d 6 /f } catch {}
+          try { reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v 'GPU Priority' /t REG_DWORD /d 10 /f } catch {}
+          try { reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v TdrDelay /t REG_DWORD /d 60 /f } catch {}
+          try { reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v TdrLevel /t REG_DWORD /d 0 /f } catch {}
+
+      - name: Launch GTA5 and My Summer Car with performance boost
+        shell: pwsh
+        run: |
+          $mscPath = "C:\Program Files (x86)\Steam\steamapps\common\My Summer Car\MySummerCar.exe"
+          $gtaPath = "C:\Program Files\Rockstar Games\GTA V\GTA5.exe"
+          $fallback = "C:\Games\GPU_SoftwareFallback"
+          
+          # Copy SwiftShader DLLs to both games if available
+          if (Test-Path $fallback) {
+            foreach ($game in @($mscPath, $gtaPath)) {
+              if (Test-Path $game) {
+                Get-ChildItem -Path $fallback -Recurse | ForEach-Object {
+                  try { Copy-Item -Path $_.FullName -Destination (Split-Path $game) -Force -ErrorAction SilentlyContinue } catch {}
+                }
+              }
+            }
+          }
+          
+          # Launch My Summer Car
+          if (Test-Path $mscPath) {
+            [System.GC]::Collect()
+            [System.GC]::WaitForPendingFinalizers()
+            $proc1 = Start-Process -FilePath $mscPath -PassThru -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+            try { $proc1.PriorityClass = "High" } catch {}
+            try { $proc1.ProcessorAffinity = [System.IntPtr]::op_Explicit(0xFFFFFFFF) } catch {}
+            Write-Host "Launched My Summer Car with high priority."
+          } else {
+            Write-Warning "My Summer Car executable not found."
+          }
+          
+          # Launch GTA5
+          if (Test-Path $gtaPath) {
+            [System.GC]::Collect()
+            [System.GC]::WaitForPendingFinalizers()
+            $proc2 = Start-Process -FilePath $gtaPath -PassThru -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+            try { $proc2.PriorityClass = "High" } catch {}
+            try { $proc2.ProcessorAffinity = [System.IntPtr]::op_Explicit(0xFFFFFFFF) } catch {}
+            Write-Host "Launched GTA5 with high priority."
+          } else {
+            Write-Warning "GTA5 executable not found."
+          }
+
+      - name: Install & Start Tailscale (if key)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTH_KEY)) {
+            try {
+              $msi = Join-Path $env:TEMP "tailscale.msi"
+              Invoke-WebRequest 'https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi' -OutFile $msi -ErrorAction Stop
+              Start-Process msiexec.exe -ArgumentList @('/i',$msi,'/quiet','/norestart') -Wait -NoNewWindow
+              & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey $env:TAILSCALE_AUTH_KEY --hostname "gh-gaming-$($env:GITHUB_RUN_ID)" --accept-routes
+            } catch {}
+          }
+
+      - name: Show connection info
+        shell: pwsh
+        run: |
+          Write-Host "Access credentials:"
+          Write-Host ("User: {0}" -f $env:RUNNERADMIN_USER)
+          Write-Host ("Password: {0}" -f $env:RUNNERADMIN_PASS)
+          $ip = ""
+          if (Test-Path "$env:ProgramFiles\Tailscale\tailscale.exe") {
+            try { $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 | Select-Object -First 1; $ip = $ip.Trim() } catch {}
+          }
+          if ([string]::IsNullOrWhiteSpace($ip)) {
+            try { $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notlike "Loopback*"} | Select-Object -First 1).IPAddress } catch {}
+          }
+          Write-Host ("IP: {0}" -f ($ip -ne $null ? $ip : "(unavailable)"))
+          Write-Host "SwiftShader fallback dir: C:\Games\GPU_SoftwareFallback"
+
+      - name: Keepalive loop
+        shell: pwsh
+        run: |
+          $iters = [int]${{ env.KEEPALIVE_ITER }}
+          for ($i=0; $i -lt $iters; $i++) {
+            Write-Host ("Keepalive {0}/{1} at {2}" -f $i, $iters, (Get-Date))
+            Start-Sleep -Seconds 600
+          }
